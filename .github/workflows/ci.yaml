@@ -6,9 +6,11 @@ on:
     branches:
       - main
       - 'feature/**'
+
   pull_request:
     branches:
       - main
+
   workflow_dispatch:
 
 permissions:
@@ -19,13 +21,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci-foundation:
+  # Job 1: Build, test, and package the application
+  build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    permissions:
-      contents: read
 
     defaults:
       run:
@@ -46,9 +46,9 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          for required_file in pom.xml mvnw; do
-            if [[ ! -f "$required_file" ]]; then
-              echo "::error::Required file missing: $required_file"
+          for file in pom.xml mvnw; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Required file missing: $file"
               exit 1
             fi
           done
@@ -59,13 +59,15 @@ jobs:
           fi
 
           chmod +x ./mvnw
+
           java -version
           ./mvnw --version
 
       - name: Build and run tests
-        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+        run: |
+          ./mvnw --batch-mode --no-transfer-progress clean verify
 
-      - name: Validate packaged JAR
+      - name: Validate application JAR
         run: |
           set -Eeuo pipefail
           shopt -s nullglob
@@ -74,20 +76,22 @@ jobs:
           valid_jar=false
 
           for jar in "${jars[@]}"; do
-            # Ignore source and javadoc JARs if present.
-            [[ "$jar" == *-sources.jar || "$jar" == *-javadoc.jar ]] && continue
+            # Ignore source and Javadoc artifacts.
+            if [[ "$jar" == *-sources.jar || "$jar" == *-javadoc.jar ]]; then
+              continue
+            fi
 
-            if [[ -s "$jar" ]]; then
-              echo "Validated artifact: $jar"
-              valid_jar=true
-            else
+            if [[ ! -s "$jar" ]]; then
               echo "::error::JAR is empty: $jar"
               exit 1
             fi
+
+            echo "Validated artifact: $jar"
+            valid_jar=true
           done
 
           if [[ "$valid_jar" != true ]]; then
-            echo "::error::No valid application JAR found in target/"
+            echo "::error::No application JAR found in target/"
             exit 1
           fi
 
@@ -107,6 +111,42 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bookstore-application-${{ github.sha }}
-          path: target/*.jar
+          path: |
+            target/*.jar
+            !target/*-sources.jar
+            !target/*-javadoc.jar
           if-no-files-found: error
           retention-days: 7
+
+  # Job 2: GitHub CodeQL static application security testing
+  codeql:
+    name: CodeQL SAST
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: autobuild
+          queries: security-extended
+
+      - name: Analyze source code
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
