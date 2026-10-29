@@ -150,3 +150,74 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:java-kotlin
+  docker-build-smoke-test:
+    name: Docker Build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    needs: build-and-test
+
+    steps: 
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      
+      - name: Validate Docker configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! -f Dockerfile ]]; then
+            echo "::error::Dockerfile not found the project"
+            exit 1
+          fi
+          
+          if [[ ! -f docker-compose.yaml && ! -f compose.yaml && ! -f  compose.yml && 1 -f docker-compose.yml ]]; then
+            echo "::notice::No Compose file found; testing the Docker image directly"
+          fi
+
+
+      - name: Build Docker Image
+        run: | 
+          docker build \ 
+            -- pull \
+            --tag bookstore-app:${{ github.sha }}
+      
+      - name: Start application container
+        run: |
+          docker run \
+            --detach \
+            --name bookstore-smoke-test \
+            --publish 127.0.0.1:18080:8080 \
+            bookstore-app:${{ github.sha }}
+
+      - name: wait for application readiness
+        shell: bash
+        run: | 
+          set -Eeuo pipefai;
+
+          for attempt in {1..30}; do 
+            if curl --fail --silent --show-error \
+              http://127.0.01:18080/books; then
+              echo 
+              echo "Application smaoke test passed"
+              exit 0
+            fi
+            echo "Attempt $attempt/30: application is not ready yet"
+            sleep 5
+          done
+
+
+          echo "::error::Application did not become ready within 150 seconds"
+          docker logs bookstore-smoke-test || true
+          exit 1
+      - name: Show container logs on failure
+        if: ${{ failure() }}
+        run: docker logs bookstore-smoke-test || true
+
+      - name: Cleanup smoke-test container
+        if: ${{ always() }}
+        run: |
+          docker rm --force bookstore-smoke-test || true
