@@ -76,7 +76,6 @@ jobs:
           valid_jar=false
 
           for jar in "${jars[@]}"; do
-            # Ignore source and Javadoc artifacts.
             if [[ "$jar" == *-sources.jar || "$jar" == *-javadoc.jar ]]; then
               continue
             fi
@@ -150,8 +149,10 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:java-kotlin
+
+  # Job 3: Build the Docker image and smoke-test the running application
   docker-build-smoke-test:
-    name: Docker Build and smoke test
+    name: Docker Build and Smoke Test
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -160,64 +161,86 @@ jobs:
 
     needs: build-and-test
 
-    steps: 
+    steps:
       - name: Checkout source code
         uses: actions/checkout@v4
-      
+
       - name: Validate Docker configuration
         shell: bash
         run: |
           set -Eeuo pipefail
 
           if [[ ! -f Dockerfile ]]; then
-            echo "::error::Dockerfile not found the project"
+            echo "::error::Dockerfile not found at the repository root"
             exit 1
           fi
-          
-          if [[ ! -f docker-compose.yaml && ! -f compose.yaml && ! -f  compose.yml && ! -f docker-compose.yml ]]; then
-            echo "::notice::No Compose file found; testing the Docker image directly"
+
+          echo "Dockerfile found"
+
+          if [[ ! -f compose.yaml &&
+                ! -f compose.yml &&
+                ! -f docker-compose.yaml &&
+                ! -f docker-compose.yml ]]; then
+            echo "::notice::No Compose file found; testing the image directly"
           fi
 
+      - name: Build Docker image
+        run: |
+          set -Eeuo pipefail
 
-      - name: Build Docker Image
-        run: | 
-          docker build \ 
-            -- pull \
-            --tag bookstore-app:${{ github.sha }}
-      
+          docker build \
+            --pull \
+            --tag "bookstore-app:${GITHUB_SHA}" \
+            .
+
       - name: Start application container
         run: |
+          set -Eeuo pipefail
+
           docker run \
             --detach \
             --name bookstore-smoke-test \
             --publish 127.0.0.1:18080:8080 \
-            bookstore-app:${{ github.sha }}
+            "bookstore-app:${GITHUB_SHA}"
 
-      - name: wait for application readiness
+      - name: Wait for application readiness
         shell: bash
-        run: | 
-          set -Eeuo pipefai;
+        run: |
+          set -Eeuo pipefail
 
-          for attempt in {1..30}; do 
-            if curl --fail --silent --show-error \
-              http://127.0.01:18080/books; then
-              echo 
-              echo "Application smaoke test passed"
+          for attempt in {1..30}; do
+            if ! docker inspect \
+              --format '{{.State.Running}}' \
+              bookstore-smoke-test 2>/dev/null | grep -qx true; then
+              echo "::error::Application container stopped unexpectedly"
+              docker logs bookstore-smoke-test || true
+              exit 1
+            fi
+
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --connect-timeout 2 \
+              --max-time 5 \
+              http://127.0.0.1:18080/books; then
+              echo
+              echo "Application smoke test passed"
               exit 0
             fi
-            echo "Attempt $attempt/30: application is not ready yet"
+
+            echo "Attempt ${attempt}/30: application is not ready yet"
             sleep 5
           done
 
-
-          echo "::error::Application did not become ready within 150 seconds"
+          echo "::error::Application did not become ready within the retry window"
           docker logs bookstore-smoke-test || true
           exit 1
+
       - name: Show container logs on failure
         if: ${{ failure() }}
         run: docker logs bookstore-smoke-test || true
 
       - name: Cleanup smoke-test container
         if: ${{ always() }}
-        run: |
-          docker rm --force bookstore-smoke-test || true
+        run: docker rm --force bookstore-smoke-test || true
