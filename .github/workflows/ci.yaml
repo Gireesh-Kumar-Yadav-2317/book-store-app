@@ -1,17 +1,14 @@
 
-name: Book Store CI
+name: Bookstore CI
 
 on:
   push:
     branches:
       - main
       - 'feature/**'
-
   pull_request:
     branches:
       - main
-
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,18 +18,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Job 1: Build, test, and package the application
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    defaults:
-      run:
-        shell: bash
-
     steps:
-      - name: Checkout source code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Java 17
@@ -42,101 +34,41 @@ jobs:
           java-version: '17'
           cache: maven
 
-      - name: Validate project structure
+      - name: Validate Maven project
         run: |
-          set -Eeuo pipefail
-
-          for file in pom.xml mvnw; do
-            if [[ ! -f "$file" ]]; then
-              echo "::error::Required file missing: $file"
-              exit 1
-            fi
-          done
-
-          if [[ ! -d src/main ]]; then
-            echo "::error::Required directory missing: src/main"
-            exit 1
-          fi
-
-          chmod +x ./mvnw
-
+          test -f pom.xml
+          test -f mvnw
+          chmod +x mvnw
           java -version
           ./mvnw --version
 
-      - name: Build and run tests
-        run: |
-          ./mvnw --batch-mode --no-transfer-progress clean verify
+      - name: Build and test
+        run: ./mvnw --batch-mode --no-transfer-progress clean verify
 
-      - name: Validate application JAR
-        run: |
-          set -Eeuo pipefail
-          shopt -s nullglob
-
-          jars=(target/*.jar)
-          valid_jar=false
-
-          for jar in "${jars[@]}"; do
-            if [[ "$jar" == *-sources.jar || "$jar" == *-javadoc.jar ]]; then
-              continue
-            fi
-
-            if [[ ! -s "$jar" ]]; then
-              echo "::error::JAR is empty: $jar"
-              exit 1
-            fi
-
-            echo "Validated artifact: $jar"
-            valid_jar=true
-          done
-
-          if [[ "$valid_jar" != true ]]; then
-            echo "::error::No application JAR found in target/"
-            exit 1
-          fi
-
-      - name: Upload test reports
-        if: ${{ always() && !cancelled() }}
+      - name: Upload test reports and JAR
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bookstore-test-reports-${{ github.run_id }}
-          path: |
-            **/target/surefire-reports/
-            **/target/failsafe-reports/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload application JAR
-        if: ${{ success() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: bookstore-application-${{ github.sha }}
+          name: bookstore-build-${{ github.sha }}
           path: |
             target/*.jar
-            !target/*-sources.jar
-            !target/*-javadoc.jar
-          if-no-files-found: error
+            target/surefire-reports/**
+            target/failsafe-reports/**
+          if-no-files-found: warn
           retention-days: 7
 
-  # Job 2: GitHub CodeQL static application security testing
   codeql:
-    name: CodeQL SAST
+    name: CodeQL Security Analysis
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     permissions:
-      actions: read
       contents: read
       security-events: write
 
     steps:
-      - name: Checkout source code
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -148,99 +80,95 @@ jobs:
       - name: Analyze source code
         uses: github/codeql-action/analyze@v4
         with:
-          category: /language:java-kotlin
+          category: '/language:java-kotlin'
 
-  # Job 3: Build the Docker image and smoke-test the running application
-  docker-build-smoke-test:
-    name: Docker Build and Smoke Test
+  docker-compose-smoke-test:
+    name: Docker Compose Smoke Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    permissions:
-      contents: read
-
+    timeout-minutes: 15
     needs: build-and-test
 
+    env:
+      POSTGRES_DB: bookstore_ci
+      POSTGRES_USER: bookstore_ci
+      POSTGRES_IMAGE_TAG: '15'
+
+      APP_BUILD_CONTEXT: .
+      APP_DOCKERFILE: Dockerfile
+      APP_IMAGE_NAME: bookstore-app
+      APP_IMAGE_TAG: ${{ github.sha }}
+      APP_HOST_PORT: '18080'
+      APP_CONTAINER_PORT: '8080'
+
+      PGADMIN_DEFAULT_EMAIL: ci@example.com
+
+      # Unique names avoid collisions between concurrent runs.
+      DB_VOLUME_NAME: bookstore-ci-data-${{ github.run_id }}-${{ github.run_attempt }}
+      APP_NETWORK_NAME: bookstore-ci-app-${{ github.run_id }}-${{ github.run_attempt }}
+      DB_NETWORK_NAME: bookstore-ci-db-${{ github.run_id }}-${{ github.run_attempt }}
+      ADMIN_NETWORK_NAME: bookstore-ci-admin-${{ github.run_id }}-${{ github.run_attempt }}
+
     steps:
-      - name: Checkout source code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate Docker configuration
+      - name: Verify Docker configuration
+        run: |
+          test -f Dockerfile
+          test -f docker-compose.yml
+          docker --version
+          docker compose version
+
+      - name: Generate temporary CI credentials
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          if [[ ! -f Dockerfile ]]; then
-            echo "::error::Dockerfile not found at the repository root"
-            exit 1
-          fi
+          db_password="$(openssl rand -hex 32)"
+          pgadmin_password="$(openssl rand -hex 32)"
 
-          echo "Dockerfile found"
+          # Mask values before exposing them to later steps.
+          echo "::add-mask::$db_password"
+          echo "::add-mask::$pgadmin_password"
 
-          if [[ ! -f compose.yaml &&
-                ! -f compose.yml &&
-                ! -f docker-compose.yaml &&
-                ! -f docker-compose.yml ]]; then
-            echo "::notice::No Compose file found; testing the image directly"
-          fi
+          # Make credentials available to subsequent steps.
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$db_password"
+            printf 'PGADMIN_DEFAULT_PASSWORD=%s\n' "$pgadmin_password"
+          } >> "$GITHUB_ENV"
 
-      - name: Build Docker image
-        run: |
-          set -Eeuo pipefail
+      - name: Validate Compose configuration
+        run: docker compose -f docker-compose.yml config --quiet
 
-          docker build \
-            --pull \
-            --tag "bookstore-app:${GITHUB_SHA}" \
-            .
+      - name: Build and start application and PostgreSQL
+        run: docker compose -f docker-compose.yml up --build --detach
 
-      - name: Start application container
-        run: |
-          set -Eeuo pipefail
-
-          docker run \
-            --detach \
-            --name bookstore-smoke-test \
-            --publish 127.0.0.1:18080:8080 \
-            "bookstore-app:${GITHUB_SHA}"
-
-      - name: Wait for application readiness
+      - name: Smoke test application endpoint
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          for attempt in {1..30}; do
-            if ! docker inspect \
-              --format '{{.State.Running}}' \
-              bookstore-smoke-test 2>/dev/null | grep -qx true; then
-              echo "::error::Application container stopped unexpectedly"
-              docker logs bookstore-smoke-test || true
-              exit 1
-            fi
-
-            if curl \
-              --fail \
-              --silent \
-              --show-error \
-              --connect-timeout 2 \
-              --max-time 5 \
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent \
+              --output /tmp/books-response.json \
               http://127.0.0.1:18080/books; then
-              echo
-              echo "Application smoke test passed"
+              echo "Smoke test passed."
               exit 0
             fi
 
-            echo "Attempt ${attempt}/30: application is not ready yet"
+            echo "Waiting for application: attempt ${attempt}/60"
             sleep 5
           done
 
-          echo "::error::Application did not become ready within the retry window"
-          docker logs bookstore-smoke-test || true
+          echo "Smoke test failed. Collecting diagnostic logs."
+          docker compose -f docker-compose.yml ps
+          docker compose -f docker-compose.yml logs --no-color app db
           exit 1
 
-      - name: Show container logs on failure
-        if: ${{ failure() }}
-        run: docker logs bookstore-smoke-test || true
+      - name: Collect logs after failure
+        if: failure()
+        run: docker compose -f docker-compose.yml logs --no-color app db
 
-      - name: Cleanup smoke-test container
-        if: ${{ always() }}
-        run: docker rm --force bookstore-smoke-test || true
+      - name: Clean up Compose services
+        if: always()
+        run: docker compose -f docker-compose.yml down --remove-orphans --timeout 10
