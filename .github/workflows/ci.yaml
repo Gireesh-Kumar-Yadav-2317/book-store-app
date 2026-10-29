@@ -174,7 +174,7 @@ jobs:
             exit 1
           fi
           
-          if [[ ! -f docker-compose.yaml && ! -f compose.yaml && ! -f  compose.yml && 1 -f docker-compose.yml ]]; then
+          if [[ ! -f docker-compose.yaml && ! -f compose.yaml && ! -f  compose.yml && ! -f docker-compose.yml ]]; then
             echo "::notice::No Compose file found; testing the Docker image directly"
           fi
 
