@@ -1,0 +1,71 @@
+name: Book Store CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bookstore-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci-foundation:
+    name: CI Foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify build tools
+        run: |
+          echo "Checking Java version"
+          java -version
+
+          echo "Checking Maven wrapper"
+
+          if [[ ! -f ./mvnw ]]; then
+            echo "::error::Maven wrapper (mvnw) is missing"
+            exit 1
+          fi
+
+          chmod +x ./mvnw
+          ./mvnw --version
+
+      - name: Validate project structure
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! -f pom.xml ]]; then
+            echo "::error::pom.xml is missing"
+            exit 1
+          fi
+
+          if [[ ! -d src/main ]]; then
+            echo "::error::src/main directory is missing"
+            exit 1
+          fi
+
+          echo "Project structure validation passed."
