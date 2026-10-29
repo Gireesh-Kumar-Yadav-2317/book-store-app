@@ -1,3 +1,4 @@
+
 name: Book Store CI
 
 on:
@@ -5,11 +6,9 @@ on:
     branches:
       - main
       - 'feature/**'
-
   pull_request:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -19,53 +18,95 @@ concurrency:
   group: bookstore-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   ci-foundation:
-    name: CI Foundation
+    name: Build and Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Verify build tools
-        run: |
-          echo "Checking Java version"
-          java -version
-
-          echo "Checking Maven wrapper"
-
-          if [[ ! -f ./mvnw ]]; then
-            echo "::error::Maven wrapper (mvnw) is missing"
-            exit 1
-          fi
-
-          chmod +x ./mvnw
-          ./mvnw --version
+          cache: maven
 
       - name: Validate project structure
         run: |
           set -Eeuo pipefail
 
-          if [[ ! -f pom.xml ]]; then
-            echo "::error::pom.xml is missing"
-            exit 1
-          fi
+          for required_file in pom.xml mvnw; do
+            if [[ ! -f "$required_file" ]]; then
+              echo "::error::Required file missing: $required_file"
+              exit 1
+            fi
+          done
 
           if [[ ! -d src/main ]]; then
-            echo "::error::src/main directory is missing"
+            echo "::error::Required directory missing: src/main"
             exit 1
           fi
 
-          echo "Project structure validation passed."
+          chmod +x ./mvnw
+          java -version
+          ./mvnw --version
+
+      - name: Build and run tests
+        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+
+      - name: Validate packaged JAR
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+
+          jars=(target/*.jar)
+          valid_jar=false
+
+          for jar in "${jars[@]}"; do
+            # Ignore source and javadoc JARs if present.
+            [[ "$jar" == *-sources.jar || "$jar" == *-javadoc.jar ]] && continue
+
+            if [[ -s "$jar" ]]; then
+              echo "Validated artifact: $jar"
+              valid_jar=true
+            else
+              echo "::error::JAR is empty: $jar"
+              exit 1
+            fi
+          done
+
+          if [[ "$valid_jar" != true ]]; then
+            echo "::error::No valid application JAR found in target/"
+            exit 1
+          fi
+
+      - name: Upload test reports
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bookstore-test-reports-${{ github.run_id }}
+          path: |
+            **/target/surefire-reports/
+            **/target/failsafe-reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload application JAR
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bookstore-application-${{ github.sha }}
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 7
