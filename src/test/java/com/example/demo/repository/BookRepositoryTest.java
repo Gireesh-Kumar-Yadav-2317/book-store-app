@@ -1,10 +1,12 @@
+
 package com.example.demo.repository;
 
 import com.example.demo.model.Book;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import jakarta.persistence.EntityManager;
 
 import java.util.Optional;
 
@@ -14,59 +16,72 @@ import static org.junit.jupiter.api.Assertions.*;
 class BookRepositoryTest {
 
     @Autowired
-    private TestEntityManager entityManager;
+    private EntityManager entityManager;
 
     @Autowired
     private BookRepository bookRepository;
 
+    // Test 1: Find a book by ID
     @Test
     void whenFindById_thenReturnBook() {
-        // given
+
+        // Given
         Book book = new Book();
         book.setTitle("Test Book");
         book.setAuthor("Test Author");
+
         entityManager.persist(book);
         entityManager.flush();
 
-        // when
-        Optional<Book> found = bookRepository.findById(book.getId());
+        // When
+        Optional<Book> found =
+                bookRepository.findById(book.getId());
 
-        // then
+        // Then
         assertTrue(found.isPresent());
-        assertEquals(book.getTitle(), found.get().getTitle());
-        assertEquals(book.getAuthor(), found.get().getAuthor());
+        assertEquals("Test Book", found.get().getTitle());
+        assertEquals("Test Author", found.get().getAuthor());
     }
 
+    // Test 2: Save a book
     @Test
     void whenSaveBook_thenReturnSavedBook() {
-        // given
+
+        // Given
         Book book = new Book();
         book.setTitle("Save Test Book");
         book.setAuthor("Save Test Author");
 
-        // when
+        // When
         Book savedBook = bookRepository.save(book);
+        entityManager.flush();
 
-        // then
+        // Then
         assertNotNull(savedBook.getId());
-        assertEquals(book.getTitle(), savedBook.getTitle());
-        assertEquals(book.getAuthor(), savedBook.getAuthor());
+        assertEquals("Save Test Book", savedBook.getTitle());
+        assertEquals("Save Test Author", savedBook.getAuthor());
     }
 
+    // Test 3: Delete a book
     @Test
     void whenDeleteBook_thenBookShouldNotExist() {
-        // given
+
+        // Given
         Book book = new Book();
         book.setTitle("Delete Test Book");
         book.setAuthor("Delete Test Author");
+
         entityManager.persist(book);
         entityManager.flush();
 
-        // when
+        // When
         bookRepository.deleteById(book.getId());
+        entityManager.flush();
 
-        // then
-        Optional<Book> deletedBook = bookRepository.findById(book.getId());
+        // Then
+        Optional<Book> deletedBook =
+                bookRepository.findById(book.getId());
+
         assertFalse(deletedBook.isPresent());
     }
 }

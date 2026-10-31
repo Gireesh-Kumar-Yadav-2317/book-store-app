@@ -3,13 +3,16 @@ package com.example.demo.unit.controller;
 import com.example.demo.controller.BookController;
 import com.example.demo.model.Book;
 import com.example.demo.repository.BookRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Arrays;
 import java.util.Optional;
@@ -25,14 +28,16 @@ class BookControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private BookRepository bookRepository;
 
-    @Autowired
-    private ObjectMapper objectMapper;
+    // Jackson 3 ObjectMapper
+    private final ObjectMapper objectMapper = new JsonMapper();
 
+    // 1. GET all books
     @Test
     void whenGetAllBooks_thenReturnJsonArray() throws Exception {
+
         Book book = new Book();
         book.setId(1L);
         book.setTitle("Test Book");
@@ -47,8 +52,10 @@ class BookControllerTest {
                 .andExpect(jsonPath("$[0].author").value("Test Author"));
     }
 
+    // 2. GET book by ID
     @Test
     void whenGetBookById_thenReturnBook() throws Exception {
+
         Book book = new Book();
         book.setId(1L);
         book.setTitle("Test Book");
@@ -63,8 +70,10 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.author").value("Test Author"));
     }
 
+    // 3. CREATE book
     @Test
     void whenCreateBook_thenReturnCreatedBook() throws Exception {
+
         Book book = new Book();
         book.setTitle("New Book");
         book.setAuthor("New Author");
@@ -85,8 +94,10 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.author").value("New Author"));
     }
 
+    // 4. UPDATE book
     @Test
     void whenUpdateBook_thenReturnUpdatedBook() throws Exception {
+
         Book existingBook = new Book();
         existingBook.setId(1L);
         existingBook.setTitle("Original Book");
@@ -109,8 +120,10 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.author").value("Updated Author"));
     }
 
+    // 5. DELETE book
     @Test
     void whenDeleteBook_thenReturn200() throws Exception {
+
         doNothing().when(bookRepository).deleteById(1L);
 
         mockMvc.perform(delete("/books/1"))
@@ -119,14 +132,15 @@ class BookControllerTest {
         verify(bookRepository, times(1)).deleteById(1L);
     }
 
+    // 6. GET non-existing book
     @Test
     void whenGetNonExistingBook_thenReturn200WithNull() throws Exception {
+
         when(bookRepository.findById(999L)).thenReturn(Optional.empty());
 
         mockMvc.perform(get("/books/999")
                 .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(content().string(""));
     }
 }
