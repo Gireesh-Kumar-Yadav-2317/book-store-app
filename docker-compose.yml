@@ -1,41 +1,77 @@
-version: '3.8'
+# build docker-compose file
 services:
   app:
-    build: .
+    build:
+      context: ${APP_BUILD_CONTEXT:-.}
+      dockerfile: ${APP_DOCKERFILE:-Dockerfile}
+    image: "${APP_IMAGE_NAME:-bookstore-app}:${APP_IMAGE_TAG:-1.0}"
     ports:
-      - "8080:8080"
-    depends_on:
-      - db
+      - "${APP_HOST_PORT:-8080}:${APP_CONTAINER_PORT:-8080}"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
-      # Swagger Configuration
-      SPRINGDOC_SWAGGER_UI_PATH: /swagger-ui.html
-      SPRINGDOC_API_DOCS_PATH: /v3/api-docs
-      SPRINGDOC_SWAGGER_UI_ENABLED: "true"
+      SERVER_PORT: ${APP_CONTAINER_PORT:-8080}
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://db:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}"
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app_network
+      - db_network
+    restart: unless-stopped
+    init: true
 
   db:
-    image: postgres:15
+    image: "postgres:${POSTGRES_IMAGE_TAG:-15}"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+      interval: ${DB_HEALTH_INTERVAL:-10s}
+      timeout: ${DB_HEALTH_TIMEOUT:-5s}
+      retries: ${DB_HEALTH_RETRIES:-5}
+      start_period: ${DB_HEALTH_START_PERIOD:-10s}
+    networks:
+      - db_network
+    restart: unless-stopped
 
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: "dpage/pgadmin4:${PGADMIN_IMAGE_TAG:-latest}"
+    profiles:
+      - admin
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?Set PGADMIN_DEFAULT_EMAIL in .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
     ports:
-      - "5050:80"
+      - "${PGADMIN_HOST_PORT:-5050}:80"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    networks:
+      - db_network
+      - admin_network
+    restart: unless-stopped
 
 volumes:
   db_data:
+    name: ${DB_VOLUME_NAME:-bookstore_db_data}
+
+networks:
+  app_network:
+    name: ${APP_NETWORK_NAME:-bookstore_app_net}
+    driver: bridge
+
+  db_network:
+    name: ${DB_NETWORK_NAME:-bookstore_db_net}
+    driver: bridge
+    internal: true
+
+  admin_network:
+    name: ${ADMIN_NETWORK_NAME:-bookstore_admin_net}
+    driver: bridge
